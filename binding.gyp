@@ -48,7 +48,8 @@
         'src/color.cc',
         'src/Image.cc',
         'src/ImageData.cc',
-        'src/init.cc'
+        'src/init.cc',
+	'src/pixformat.cc',
       ],
       'conditions': [
         ['OS=="win"', {

@@ -18,6 +18,7 @@
 #include "CanvasRenderingContext2d.h"
 #include "CanvasGradient.h"
 #include "CanvasPattern.h"
+#include "pixformat.h"
 
 #ifdef HAVE_FREETYPE
 #include "FontFace.h"
@@ -485,8 +486,10 @@ void
 Context2d::blur(cairo_surface_t *surface, int radius) {
   // Steve Hanov, 2009
   // Released into the public domain.
+  // TODO: round to nearest instead of + 0.5f would be better, but lrint doesn't inline portably
   radius = radius * 0.57735f + 0.5f;
   // get width, height
+  // FIXME: not safe to assume stride = width, cairo aligns rows for SIMD
   int width = cairo_image_surface_get_width( surface );
   int height = cairo_image_surface_get_height( surface );
   unsigned* precalc =
@@ -591,12 +594,7 @@ NAN_METHOD(Context2d::PutImageData) {
 
   Context2d *context = Nan::ObjectWrap::Unwrap<Context2d>(info.This());
   ImageData *imageData = Nan::ObjectWrap::Unwrap<ImageData>(obj);
-
-  uint8_t *src = imageData->data();
-  uint8_t *dst = context->canvas()->data();
-
-  int srcStride = imageData->stride()
-    , dstStride = context->canvas()->stride();
+  Canvas *canvas = context->canvas();
 
   int sx = 0
     , sy = 0
@@ -612,8 +610,8 @@ NAN_METHOD(Context2d::PutImageData) {
     case 3:
       // Need to wrap std::min calls using parens to prevent macro expansion on
       // windows. See http://stackoverflow.com/questions/5004858/stdmin-gives-error
-      cols = (std::min)(imageData->width(), context->canvas()->width - dx);
-      rows = (std::min)(imageData->height(), context->canvas()->height - dy);
+      cols = (std::min)(imageData->width(), canvas->width - dx);
+      rows = (std::min)(imageData->height(), canvas->height - dy);
       break;
     // imageData, dx, dy, sx, sy, sw, sh
     case 7:
@@ -639,8 +637,8 @@ NAN_METHOD(Context2d::PutImageData) {
       // clamp width at canvas size
       // Need to wrap std::min calls using parens to prevent macro expansion on
       // windows. See http://stackoverflow.com/questions/5004858/stdmin-gives-error
-      cols = (std::min)(sw, context->canvas()->width - dx);
-      rows = (std::min)(sh, context->canvas()->height - dy);
+      cols = (std::min)(sw, canvas->width - dx);
+      rows = (std::min)(sh, canvas->height - dy);
       break;
     default:
       return Nan::ThrowError("invalid arguments");
@@ -648,45 +646,22 @@ NAN_METHOD(Context2d::PutImageData) {
 
   if (cols <= 0 || rows <= 0) return;
 
-  src += sy * srcStride + sx * 4;
-  dst += dstStride * dy + 4 * dx;
-  for (int y = 0; y < rows; ++y) {
-    uint8_t *dstRow = dst;
-    uint8_t *srcRow = src;
-    for (int x = 0; x < cols; ++x) {
-      // rgba
-      uint8_t r = *srcRow++;
-      uint8_t g = *srcRow++;
-      uint8_t b = *srcRow++;
-      uint8_t a = *srcRow++;
+  // assert(cairo_image_surface_get_format(canvas->surface()) == CAIRO_FORMAT_ARGB32);
 
-      // argb
-      // performance optimization: fully transparent/opaque pixels can be
-      // processed more efficiently.
-      if (a == 0) {
-        *dstRow++ = 0;
-        *dstRow++ = 0;
-        *dstRow++ = 0;
-        *dstRow++ = 0;
-      } else if (a == 255) {
-        *dstRow++ = b;
-        *dstRow++ = g;
-        *dstRow++ = r;
-        *dstRow++ = a;
-      } else {
-        float alpha = (float)a / 255;
-        *dstRow++ = b * alpha;
-        *dstRow++ = g * alpha;
-        *dstRow++ = r * alpha;
-        *dstRow++ = a;
-      }
-    }
-    dst += dstStride;
-    src += srcStride;
-  }
+  int srcPixStride = imageData->stride() >> 2  // compiler can't assume that (imageData->width()*4)>>2 == width, but this is outside the loop so let it emit a pair of shifts :/
+    , dstPixStride = canvas->stride() >> 2;
+
+  // gcc seems to do better when pointer-casting outside the loop
+  const uint32_t *src = reinterpret_cast<const uint32_t*>(imageData->data());
+  uint32_t *dst = reinterpret_cast<uint32_t*>(canvas->data());
+
+  src += sy * srcPixStride + sx;
+  dst += dstPixStride * dy + dx;
+
+  PutPixels(dst, src, rows, cols, dstPixStride, srcPixStride);
 
   cairo_surface_mark_dirty_rectangle(
-      context->canvas()->surface()
+      canvas->surface()
     , dx
     , dy
     , cols
@@ -745,11 +720,6 @@ NAN_METHOD(Context2d::GetImageData) {
 
   int size = sw * sh * 4;
 
-  int srcStride = canvas->stride();
-  int dstStride = sw * 4;
-
-  uint8_t *src = canvas->data();
-
 #if NODE_MAJOR_VERSION == 0 && NODE_MINOR_VERSION <= 10
   Local<Object> global = Context::GetCurrent()->Global();
 
@@ -762,35 +732,23 @@ NAN_METHOD(Context2d::GetImageData) {
 #endif
 
   Nan::TypedArrayContents<uint8_t> typedArrayContents(clampedArray);
-  uint8_t* dst = *typedArrayContents;
 
-  // Normalize data (argb -> rgba)
-  for (int y = 0; y < sh; ++y) {
-    uint32_t *row = (uint32_t *)(src + srcStride * (y + sy));
-    for (int x = 0; x < sw; ++x) {
-      int bx = x * 4;
-      uint32_t *pixel = row + x + sx;
-      uint8_t a = *pixel >> 24;
-      uint8_t r = *pixel >> 16;
-      uint8_t g = *pixel >> 8;
-      uint8_t b = *pixel;
-      dst[bx + 3] = a;
+  // This is strict-aliasing safe, at least if uint8_t is based on char, because char can alias anything.
+  const uint32_t *src = reinterpret_cast<const uint32_t*>(canvas->data());
+  uint32_t* dst = reinterpret_cast<uint32_t*>(*typedArrayContents);
 
-      // Performance optimization: fully transparent/opaque pixels can be
-      // processed more efficiently.
-      if (a == 0 || a == 255) {
-        dst[bx + 0] = r;
-        dst[bx + 1] = g;
-        dst[bx + 2] = b;
-      } else {
-        float alpha = (float)a / 255;
-        dst[bx + 0] = (int)((float)r / alpha);
-        dst[bx + 1] = (int)((float)g / alpha);
-        dst[bx + 2] = (int)((float)b / alpha);
-      }
+  // assert(cairo_image_surface_get_format(canvas->surface()) == CAIRO_FORMAT_ARGB32);
 
-    }
-    dst += dstStride;
+  size_t rows = sh, cols = sw;
+  if (rows > 0 && cols > 0) { // always true?
+    unsigned srcPixStride = canvas->stride() >> 2;
+    unsigned dstPixStride = sw; // sw * 4;
+
+    // put:  src += sy * srcPixStride + sx;
+    // put:  dst += dstPixStride * dy + dx;
+    src += sy * srcPixStride + sx;
+    dst += 0; // Always write the whole dst
+    GetPixels(dst, src, rows, cols, dstPixStride, srcPixStride);
   }
 
   const int argc = 3;
