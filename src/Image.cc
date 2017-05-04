@@ -692,6 +692,7 @@ Image::decodeJPEGIntoSurface(jpeg_decompress_struct *args) {
   int stride = width * 4;
   cairo_status_t status;
 
+  // TODO: let cairo allocate the surface to ensure alignment
   uint8_t *data = (uint8_t *) malloc(width * height * 4);
   if (!data) {
     jpeg_abort_decompress(args);
@@ -699,6 +700,7 @@ Image::decodeJPEGIntoSurface(jpeg_decompress_struct *args) {
     return CAIRO_STATUS_NO_MEMORY;
   }
 
+  // TODO: convert in-place, working backwards from the end
   uint8_t *src = (uint8_t *) malloc(width * args->output_components);
   if (!src) {
     free(data);
@@ -707,6 +709,7 @@ Image::decodeJPEGIntoSurface(jpeg_decompress_struct *args) {
     return CAIRO_STATUS_NO_MEMORY;
   }
 
+  // This auto-vectorizes with gcc, but could probably do better manually
   for (int y = 0; y < height; ++y) {
     jpeg_read_scanlines(args, &src, 1);
     uint32_t *row = (uint32_t *)(data + stride * y);
