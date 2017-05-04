@@ -1019,28 +1019,42 @@ NAN_SETTER(Context2d::SetGlobalCompositeOperation) {
   Context2d *context = Nan::ObjectWrap::Unwrap<Context2d>(info.This());
   cairo_t *ctx = context->context();
   String::Utf8Value type(value->ToString());
+  // even better would be checking based on first character, but then we need multiple ifdef CAIRO_VERSION_MINOR >= 10
+  // or by strlen, but that would make the source hard to read
+  // TODO: put these in a table and loop over it.  Use the same table for Get
+  const cairo_operator_t default_op = CAIRO_OPERATOR_OVER;
   if (0 == strcmp("xor", *type)) {
     cairo_set_operator(ctx, CAIRO_OPERATOR_XOR);
-  } else if (0 == strcmp("source-atop", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_ATOP);
-  } else if (0 == strcmp("source-in", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_IN);
-  } else if (0 == strcmp("source-out", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_OUT);
-  } else if (0 == strcmp("destination-atop", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_DEST_ATOP);
-  } else if (0 == strcmp("destination-in", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_DEST_IN);
-  } else if (0 == strcmp("destination-out", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_DEST_OUT);
-  } else if (0 == strcmp("destination-over", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_DEST_OVER);
+  } else if (0 == strncmp("source", *type, strlen("source"))) {
+    if ((*type)[strlen("source")] == '\0') {  // 0 == strcmp("source", *type)
+      cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
+    } else if (0 == strcmp("source-atop", *type)) {
+      cairo_set_operator(ctx, CAIRO_OPERATOR_ATOP);
+    } else if (0 == strcmp("source-in", *type)) {
+      cairo_set_operator(ctx, CAIRO_OPERATOR_IN);
+    } else if (0 == strcmp("source-out", *type)) {
+      cairo_set_operator(ctx, CAIRO_OPERATOR_OUT);
+    } else
+      cairo_set_operator(ctx, default_op);  // TODO: hard-coding the default is clunky here
+    return; // no other "source"-prefix options
+
+  } else if (0 == strncmp("dest", *type, strlen("dest"))) {
+    if ((*type)[strlen("dest")] == '\0') { // 0 == strcmp("dest", *type)
+      cairo_set_operator(ctx, CAIRO_OPERATOR_DEST);
+    } else if (0 == strcmp("destination-atop", *type)) {
+      cairo_set_operator(ctx, CAIRO_OPERATOR_DEST_ATOP);
+    } else if (0 == strcmp("destination-in", *type)) {
+      cairo_set_operator(ctx, CAIRO_OPERATOR_DEST_IN);
+    } else if (0 == strcmp("destination-out", *type)) {
+      cairo_set_operator(ctx, CAIRO_OPERATOR_DEST_OUT);
+    } else if (0 == strcmp("destination-over", *type)) {
+      cairo_set_operator(ctx, CAIRO_OPERATOR_DEST_OVER);
+    } else
+      cairo_set_operator(ctx, default_op);
+    return; // no other "dest"-prefix options
+
   } else if (0 == strcmp("clear", *type)) {
     cairo_set_operator(ctx, CAIRO_OPERATOR_CLEAR);
-  } else if (0 == strcmp("source", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
-  } else if (0 == strcmp("dest", *type)) {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_DEST);
   } else if (0 == strcmp("saturate", *type)) {
     cairo_set_operator(ctx, CAIRO_OPERATOR_SATURATE);
   } else if (0 == strcmp("over", *type)) {
@@ -1084,7 +1098,7 @@ NAN_SETTER(Context2d::SetGlobalCompositeOperation) {
   } else if (0 == strcmp("lighter", *type)) {
     cairo_set_operator(ctx, CAIRO_OPERATOR_ADD);
   } else {
-    cairo_set_operator(ctx, CAIRO_OPERATOR_OVER);
+    cairo_set_operator(ctx, default_op);  // default.  Maybe check for this to make it fast to restore overlay mode.
   }
 }
 
