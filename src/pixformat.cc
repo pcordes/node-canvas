@@ -299,23 +299,33 @@ static inline void copy1PixRGBAtoNative(uint32_t *__restrict__ dst, const uint32
 static inline
 void putrow_scalar(uint32_t *__restrict__ dst, const uint32_t *__restrict__ src, size_t pixCount)
 {
-  const uint32_t *lastsrc = src + pixCount - 1;
+//  const uint32_t *lastsrc = src + pixCount - 1;
   const uint32_t *__restrict__ srcp = src;
   uint32_t *__restrict__ dstp = dst;
 
 //#ifndef HAVE_SIMD_PUTIMAGE  // scalar version only used for rows of <4 pixels
-  for (; srcp <= lastsrc-3;  srcp+=4, dstp+=4) {
-    IACA_START;
-    copy1PixRGBAtoNative(dstp,   srcp);
-    copy1PixRGBAtoNative(dstp+1, srcp+1);
-    copy1PixRGBAtoNative(dstp+2, srcp+2);
-    copy1PixRGBAtoNative(dstp+3, srcp+3);
+//  for (; srcp <= lastsrc-3;  srcp+=4, dstp+=4) {
+  //int signed_count = pixCount;
+  if (pixCount >= 4) {  // no joy with a while() loop.
+    do {
+      IACA_START;
+      copy1PixRGBAtoNative(dstp,   srcp);
+      copy1PixRGBAtoNative(dstp+1, srcp+1);
+      copy1PixRGBAtoNative(dstp+2, srcp+2);
+      copy1PixRGBAtoNative(dstp+3, srcp+3);
+      srcp+=4, dstp+=4;
+      pixCount-=4;
+    }while((ssize_t)pixCount >= 0); // works but ugly.  Also, pointer-compare only needs to macro-fuse cmp, not sub/js.  sub/js doesn't macro-fuse on SnB-family.
+    // C++ makes it hard to express sub/jnc in a compiler-friendly way that won't compile to garbage if the compiler doesn't figure it out
   }
   IACA_END;
 //#endif
-  for (; srcp <= lastsrc; srcp+=1, dstp+=1) {
+//  for (; srcp <= lastsrc; srcp+=1, dstp+=1) {
+  while((ssize_t)pixCount > 0) {
     IACA_START;
     copy1PixRGBAtoNative(dstp,   srcp);
+    srcp++, dstp++;
+    pixCount--;
   }
   IACA_END;
 }
